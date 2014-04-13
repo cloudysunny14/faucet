@@ -18,6 +18,7 @@
 import re
 import sys
 import urllib
+import json
 
 from rest import RESTClient
 
@@ -66,9 +67,11 @@ class FaucetClient(object):
 
     SUPPORTED_ACTIONS = ['accept', 'mark-packet']
 
-    SUPPORTED_QUEIES = ['dst-address', 'src-address', \
+    SUPPORTED_QUERIES = ['dst-address', 'src-address', \
         'dst-port', 'src-port', 'new-packet-mark', \
         'queue', 'packet-mark', 'chain']
+
+    SUPPORTED_ROUTE_ENTRY = ['address', 'destination', 'gateway']
 
     def __init__(self, host, rest_client=RESTClient):
         self.rest_client = rest_client
@@ -104,6 +107,13 @@ class FaucetClient(object):
         query = operations[1]
         query_list = query.split(',')
         property_dict = {'action': inst}
+        property_dict = self._get_property_dict(query_list,
+            FaucetClient.SUPPORTED_QUERIES, property_dict)
+
+        return property_dict
+
+    def _get_property_dict(self, query_list, valid_list, p_dict={}):
+        print query_list
         for query in query_list:
             param = query.split('=')
             if len(param) != 2:
@@ -111,13 +121,26 @@ class FaucetClient(object):
                     not parse actions:%s' % query)
             key = param[0]
             value = param[1]
-            if key not in FaucetClient.SUPPORTED_QUEIES:
+            if key not in valid_list:
                 raise NotSupportedException(msg='Not \
                     supported query :%s' % query)
-            property_dict[key] = value
+            p_dict[key] = value
+        print p_dict
+        return p_dict
 
-        return property_dict
+    def set_route(self, route, switch=None):
+        path = 'router/%s' % (switch)
+        print route
+        params_json = self._route_parse(route)
+        print params_json
+        url, params = self.request(path, params_json, method='POST')
+        return self.rest_client.POST_BODY(url, None, {}, params_json)
 
+    def _route_parse(self, route):
+        route_query = route.split(',')
+        property_dict = self._get_property_dict(route_query,
+            FaucetClient.SUPPORTED_ROUTE_ENTRY, {})
+        return json.dumps(property_dict)
 
     def request(self, target, params=None, method='POST',
             content_server=False):

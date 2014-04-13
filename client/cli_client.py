@@ -85,6 +85,24 @@ class QueueTerm(cmd.Cmd):
         return True
 
 
+class IpTerm(cmd.Cmd):
+    def __init__(self, switch_id, api_client):
+        cmd.Cmd.__init__(self)
+        self._switch_id = switch_id
+        self._api_client = api_client
+
+    def emptyline(self):
+        None
+
+    def do_route(self, route):
+        resp = self._api_client.set_route(route,
+            self._switch_id)
+        print resp
+
+    def do_exit(self, s):
+        return True
+
+
 class FaucetTerm(cmd.Cmd):
 
     def __init__(self, host):
@@ -117,15 +135,19 @@ class FaucetTerm(cmd.Cmd):
             msg = 'Must specify target switch id'
             self.stdout.write('Error: %s\n' % msg)
             return
-          
+
         term = MangleTerm(switch_id, self.api_client)
         term.prompt = self.prompt[:-2]+':mangle> '
         term.cmdloop()
 
-    def do_ip(self):
-        # TODO:will implemet simple router
-        None
-
+    def do_ip(self, switch_id):
+        if not len(switch_id):
+            msg = 'Must specify target switch id'
+            self.stdout.write('Error: %s\n' % msg)
+            return
+        term = IpTerm(switch_id, self.api_client)
+        term.prompt = self.prompt[:-2]+':ip> '
+        term.cmdloop()
 
 def main(argv):
     try:

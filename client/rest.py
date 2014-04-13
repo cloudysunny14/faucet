@@ -204,6 +204,14 @@ class RESTClientObject(object):
         return self.request("POST", url,
                             post_params=params, headers=headers, raw_response=raw_response)
 
+    def POST_BODY(self, url, params=None, headers=None, body=None, raw_response=False):
+        assert type(raw_response) == bool
+        if params is None:
+            params = {}
+        return self.request("POST", url, body=body,
+                            post_params=params, headers=headers,
+                            raw_response=raw_response)
+
     def PUT(self, url, body, headers=None, raw_response=False):
         assert type(raw_response) == bool
         return self.request("PUT", url, body=body, headers=headers, raw_response=raw_response)
@@ -227,6 +235,10 @@ class RESTClient(object):
     @classmethod
     def PUT(cls, *n, **kw):
         return cls.IMPL.PUT(*n, **kw)
+
+    @classmethod
+    def POST_BODY(cls, *n, **kw):
+        return cls.IMPL.POST_BODY(*n, **kw)
 
 
 class RESTSocketError(socket.error):
