@@ -44,11 +44,11 @@ ARP_FLOW_PRIORITY = ofproto_v1_3_parser.UINT16_MAX - 1
 OUTPUT_FLOW_PRIORITY = ofproto_v1_3_parser.UINT16_MAX >> 1
 LISTED_FLOW_PRIORITY = ofproto_v1_3_parser.UINT16_MAX >> 2 
 # Built-in chain
-# [PRE-MARKING] - [MARKING] - [OUTPUT]
+# [INPUT] - [OUTPUT] - [POST-ROUTING]
 MANGLE_INPUT_TABLE_ID = 0
-MANGLE_PREFORWARD_TABLE_ID = 1
-MANGLE_FORWARD_TABLE_ID = 2
-MANGLE_OUTPUT_TABLE_ID = 3
+MANGLE_PRE_ROUTING_TABLE_ID = 1
+MANGLE_OUTPUT_TABLE_ID = 2 
+MANGLE_POST_ROUTING_TABLE_ID = 3 
 
 MANGLE_DEFAULT_PRIORITY = 0
 MANGLE_DEFAULT_COOKIE = 0
@@ -59,31 +59,20 @@ MANGLE_ACTION = 'action'
 MANGLE_ACTION_ACCEPT = 'accept'
 MANGLE_ACTION_DENY = 'deny'
 MANGLE_ACTION_CONTROLLER = 'controller'
-MANGLE_ACTION_ADD_DST_TO_ADDRESS_LIST = 'add-dst-to-address-list'
-MANGLE_ACTION_ADD_SRC_TO_ADDRESS_LIST = 'add-src-to-address-list'
 MANGLE_ACTION_MARK_PACKET = 'mark-packet'
 MANGLE_JUMP = 'jump'
 MANGLE_QUEUE = 'queue'
 MANGLE_PRIORITY = 'priority'
 
 MANGLE_JUMP_TARGET = 'jump-target'
-MANGLE_ADDRESS_LIST = 'address-list'
 MANGLE_DST_ADDRESS = 'dst-address'
 MANGLE_SRC_ADDRESS = 'src-address'
-MANGLE_DST_ADDRESS_LIST = 'dst-address-list'
-MANGLE_SRC_ADDRESS_LIST = 'src-address-list'
 MANGLE_PROTOCOL = 'protocol'
 MANGLE_LIMIT = 'limit'
 MANGLE_NEW_PACKET_MARK = 'new-packet-mark'
 
-# TODO:Compatible with address type
 MANGLE_DST_ADDRESS_TYPE = 'dst-address-type'
 MANGLE_SRC_ADDRESS_TYPE = 'src-address-type'
-MANGLE_ADDRESS_TYPE_MULTICAST = 'multicast'
-MANGLE_ADDRESS_TYPE_UNICAST = 'unicast'
-MANGLE_ADDRESS_TYPE_BROADCAST = 'broadcast'
-MANGLE_ADDRESS_TYPE_BROADCAST = 'local'
-MANGLE_IP_MULTICAST = '224.0.0.0/4'
 MANGLE_PACKET_MARK = 'packet-mark'
 MANGLE_DST_MAC_ADDRESS = 'dst-mac-address'
 MANGLE_SRC_MAC_ADDRESS = 'src-mac-address'
@@ -91,9 +80,8 @@ MANGLE_DST_PORT = 'dst-port'
 
 MANGLE_CHAIN = 'chain'
 MANGLE_CHAIN_INPUT = 'input'
-MANGLE_CHAIN_PREFORWARD = 'preforward'
-MANGLE_CHAIN_FORWARD = 'forward'
 MANGLE_CHAIN_OUTPUT = 'output'
+MANGLE_CHAIN_POST_ROUTING = 'post-routing'
 
 MANGLE_NW_PROTO_ICMP = 'icmp'
 MANGLE_NW_PROTO_TCP = 'tcp'
@@ -248,44 +236,26 @@ class QoSLib(app_manager.RyuApp):
         """"""
         switch = self.get_switch(queue.datapath)
         queue.edit_config(switch)
-        """
-        resources = []
-        switch = self.get_switch(queue.datapath)
-        if queue.name in switch.queues.keys():
-            resources = switch.queues[queue.name].keys()
-        elif len(switch.queues.values()):
-            for queues in queue.queue_ids.values():
-                filled_res = reduce(lambda ql, qr: ql + qr,
-                                       switch.queues.values())
-                f_queue = list(set(queues) - set(filled_res))
-                if len(f_queue):
-                    resources.append(f_queue[0])
-        else:
-            for queues in queue.queue_ids.values():
-                if len(queues):
-                    resources.append(queues[0])
-        if not len(resources):
-            raise Exception()
-        queue_id_mapping = queue.get_queue_mapping(resources)
-        switch.queues[queue.name] = queue_id_mapping
-        queue.edit_config(resources)
-        """
-
-    def apply(self):
-        """"""
 
 
 class MangleAlreadyBuildError(RyuException):
-    message = 'Mangle is already build. : mangle=%(mangle)s'
+    message = 'Mangle is already build : mangle=%(mangle)s'
 
 
 class MangleAlreadyAddedListError(RyuException):
-    message = 'Mangle is already build. : list_name=%(list_name)s,\
+    message = 'Mangle is already build : list_name=%(list_name)s,\
                list=%(list)s'
 
+class MangleBuildError(RyuException):
+    message = 'Mangle could\'n build : msg=%(msg)s mangle=%(mangle)s'
 
-class MangleValidateError(RyuException):
-    message = 'Mangle is not valid : msg=%(msg)s mangle=%(mangle)s'
+
+class MangleCommandError(RyuException):
+  message = 'Mangle command error : msg=%(msg)s'
+
+
+class MangleInconsistencyError(RyuException):
+  message = 'Mangle unexpected inconsistency error : msg=%(msg)s'
 
 
 class _Mangle(object):
@@ -327,31 +297,6 @@ class _Mangle(object):
                 self.properties[MANGLE_CHAIN] = MANGLE_INPUT_TABLE_ID
                 pass
 
-        list_name = self.properties.get(MANGLE_ADDRESS_LIST, None) 
-        if MANGLE_ACTION_ADD_DST_TO_ADDRESS_LIST in self.properties or \
-           MANGLE_ACTION_ADD_SRC_TO_ADDRESS_LIST in self.properties:
-            if MANGLE_ADDRESS_LIST not in self.properties:
-                return False, 'Action add list required to specify\
-                                  list'
-        if MANGLE_DST_ADDRESS_LIST in self.properties:
-            list_name = self.properties[MANGLE_DST_ADDRESS_LIST]
-        if MANGLE_SRC_ADDRESS_LIST in self.properties:
-            list_name = self.properties[MANGLE_SRC_ADDRESS_LIST]
-
-        if list_name is not None:
-            if list_name not in self.address_list_dict and \
-               list_name not in switch.address_list:
-                return False, 'Specify list is not exist'
-            else:
-                switch.put_address_list(list_name,
-                    self.address_list_dict.get(list_name, []))
-
-        is_src = MANGLE_ACTION_ADD_SRC_TO_ADDRESS_LIST in \
-                self.properties
-        if list_name is not None:
-            self.cookie = switch.get_cookie_for_list(list_name,
-                self.table_id, is_src)
-
         if MANGLE_PACKET_MARK in self.properties:
             mark = self.properties[MANGLE_PACKET_MARK]
             value = switch.get_dscp_value(mark)
@@ -367,7 +312,7 @@ class _Mangle(object):
     def build(self, waiters, switch):
         result, msg = self._validate_mangle(waiters, switch)
         if not result:
-            raise MangleValidateError(msg=msg, mangle=self.properties)
+            raise MangleBuildError(msg=msg, mangle=self.properties)
         self.is_built = True
         return self
 
@@ -389,26 +334,18 @@ class _Action(object):
         table_id = properties.get(MANGLE_CHAIN,
             MANGLE_INPUT_TABLE_ID)
         if value == MANGLE_ACTION_ACCEPT:
-            table_id = MANGLE_OUTPUT_TABLE_ID
+            table_id = MANGLE_POST_ROUTING_TABLE_ID
         elif MANGLE_JUMP in properties:
             table_name = properties[MANGLE_JUMP]
-            if table_name == MANGLE_CHAIN_PREFORWARD:
-                table_id = MANGLE_PREFORWARD_TABLE_ID
-            elif table_name == MANGLE_CHAIN_FORWARD:
-                table_id = MANGLE_FORWARD_TABLE_ID
-            elif table_name == MANGLE_CHAIN_OUTPUT:
-                table_id = MANGLE_OUTPUT_TABLE_ID
-            elif table_name == MANGLE_CHAIN_INPUT:
-                pass
+            if table_name == MANGLE_CHAIN_POST_ROUTING:
+                table_id = MANGLE_POST_ROUTING_TABLE_ID
             else: 
                 table_id = self.switch.chains_to_table_id(
                     properties[MANGLE_JUMP])
         elif table_id == MANGLE_CHAIN_INPUT:
-            table_id = MANGLE_PREFORWARD_TABLE_ID
-        elif table_id == MANGLE_CHAIN_PREFORWARD:
-            table_id = MANGLE_FORWARD_TABLE_ID
-        elif table_id == MANGLE_CHAIN_FORWARD:
-            table_id = MANGLE_OUTPUT_TABLE_ID
+            table_id = MANGLE_PRE_ROUTING_TABLE_ID
+        elif table_id == MANGLE_CHAIN_OUTPUT:
+            table_id = MANGLE_POST_ROUTING_TABLE_ID
         return table_id
 
     def get_next_table(self):
@@ -421,16 +358,11 @@ class _Action(object):
     def to_openflow(self):
         properties = self.mangle.properties
         if MANGLE_ACTION not in properties:
-            raise Exception()
+            raise MangleCommandError(msg='Must specify action.')
         value = properties[MANGLE_ACTION]
         LOG.info("value:%s", value)
         actions = []
-        if value == MANGLE_ACTION_ADD_DST_TO_ADDRESS_LIST or\
-                value == MANGLE_ACTION_ADD_SRC_TO_ADDRESS_LIST:
-            actions.append({'type': 'OUTPUT',
-                'port': OUTPUT_CONTROLLER})
-            return actions
-        elif value == MANGLE_ACTION_MARK_PACKET:
+        if value == MANGLE_ACTION_MARK_PACKET:
             key = properties[MANGLE_NEW_PACKET_MARK]
             value = self.switch.mark_packet(key)
             actions.append({'type': 'SET_FIELD',
@@ -491,7 +423,6 @@ class _Match(object):
 
     def convert_match(self, match_property):
         match = {}
-        LOG.info("match_property:%s", match_property)
         for key, value in match_property.items():
             if key in _Match._CONVERT_PREREQ:
                 prereq = _Match._CONVERT_PREREQ[key]
@@ -516,70 +447,12 @@ class _Match(object):
         if not self._validate_match(match_properties):
             return
         matches = []
-        key = None 
-        next_table = False 
-        if MANGLE_SRC_ADDRESS_LIST in match_properties:
-            key = match_properties[MANGLE_SRC_ADDRESS_LIST]
-            add_property_key = MANGLE_SRC_ADDRESS
-        elif MANGLE_DST_ADDRESS_LIST in match_properties:
-            key = match_properties[MANGLE_DST_ADDRESS_LIST]
-            add_property_key = MANGLE_DST_ADDRESS
-        elif MANGLE_ACTION_ADD_SRC_TO_ADDRESS_LIST in \
-            match_properties.values() or \
-            MANGLE_ACTION_ADD_DST_TO_ADDRESS_LIST in \
-            match_properties.values():
-            pass
-        else:
-            next_table = True
-
-        address_list = self.switch.get_address_list(key)
-        for address in address_list:
-            address_match = {add_property_key: address}
-            matches.append((self.convert_match(address_match),
-               True))
-
         # In case of address list, not append match
         # because match field only required to address lists
-        if not len(address_list):
-            matches.append((self.convert_match(match_properties),
-                next_table))
-
+        matches.append((self.convert_match(match_properties),
+                True))
         return matches
 
-# I will merge this method of_ctl module
-def get_flow_stats(dp, waiters, ofctl,
-    table_id, cookie, cookie_mask):
-    table_id = dp.ofproto.OFPTT_ALL
-    flags = 0
-    out_port = dp.ofproto.OFPP_ANY
-    out_group = dp.ofproto.OFPG_ANY
-    cookie = 0 
-    cookie_mask = 0
-    match = dp.ofproto_parser.OFPMatch()
-    stats = dp.ofproto_parser.OFPFlowStatsRequest(
-        dp, flags, table_id, out_port, out_group, cookie, cookie_mask,
-        match)
-
-    msgs = []
-    ofctl.send_stats_request(dp, stats, waiters, msgs)
-
-    flows = []
-    for msg in msgs:
-        for stats in msg.body:
-            actions = ofctl.actions_to_str(stats.instructions)
-            match = ofctl.match_to_str(stats.match)
-
-            s = {'priority': stats.priority,
-                 'cookie': stats.cookie,
-                 'idle_timeout': stats.idle_timeout,
-                 'hard_timeout': stats.hard_timeout,
-                 'actions': actions,
-                 'match': match,
-                 'table_id': stats.table_id}
-            flows.append(s)
-    flows = {str(dp.id): flows}
-
-    return flows
 
 class _Switch(object):
 
@@ -590,41 +463,20 @@ class _Switch(object):
                  waiters,
                  chains={MANGLE_CHAIN_INPUT: 
                              MANGLE_INPUT_TABLE_ID,
-                         MANGLE_CHAIN_PREFORWARD:
-                             MANGLE_PREFORWARD_TABLE_ID,
-                         MANGLE_CHAIN_FORWARD:
-                             MANGLE_FORWARD_TABLE_ID,
                          MANGLE_CHAIN_OUTPUT:
-                             MANGLE_OUTPUT_TABLE_ID}):
+                             MANGLE_OUTPUT_TABLE_ID,
+                         MANGLE_CHAIN_POST_ROUTING:
+                             MANGLE_POST_ROUTING_TABLE_ID}):
         self.datapath = datapath
         self.waiters = waiters
         self.ofctl = _OFCtl.create_ofctl(datapath)
         self.chains = chains
-        # {list_name: {cookie:[cookie..], address:[address..],
-        # actions: [action, ..]}}
-        self.address_list = {}
-        self.current_list_value = 0
         self.mac_to_port = {}
         #{queue_name: {resource_id: queue_id, ...}}
         self.queues = {}
         #{mark: dscp, ..}
         self.dscp_mark_mapping = {}
         self.current_dscp = 1
-
-    def put_address_list(self, list_name, address_list):
-        if list_name not in self.address_list:
-            LOG.info("NOT IN")
-            self.address_list[list_name] = {}
-            self.address_list[list_name]['address'] = []
-        address = self.address_list[list_name]['address']
-        address = address + address_list
-        self.address_list[list_name]['address'] = address
-        LOG.info("put_list%s, %s" % (self.address_list, list_name))
-
-    def get_address_list(self, list_name):
-        lists = self.address_list.get(list_name, {})
-        LOG.info("get_list%s, %s" % (self.address_list, list_name))
-        return lists.get('address', [])
 
     def set_arp_flow(self):
         ofproto = self.datapath.ofproto
@@ -659,58 +511,13 @@ class _Switch(object):
         action_src = [parser.OFPActionOutput(in_port)]
         self.add_flow(datapath, OUTPUT_FLOW_PRIORITY, match, action_src)
         LOG.info("END_FLOW")
-
-    def _get_all_cookies(self):
-        all_cookies = {}
-        for key in self.address_list.keys():
-            cookies = self.address_list[key]['cookie']
-            for cookie in cookies:
-                all_cookies[cookie] = key
-        return all_cookies
-
-    def _update_list(self, list_name, chain, cookie, address):
-        msg = get_flow_stats(self.datapath,
-            self.waiters,
-            self.ofctl,
-            table_id = chain,
-            cookie = cookie,
-            cookie_mask = MANGLE_DEFAULT_COOKIE_MASK)
-        self.datapath.send_barrier()
-        LOG.info("UPDATE_LIST:%s", msg)
-                       
-    def _add_list(self, msg, list_name):
-        pkt = packet.Packet(msg.data)
-        header_list = dict((p.protocol_name, p)
-                           for p in pkt.protocols if type(p) != str)
-        if header_list:
-            if IPV4 in header_list:
-                LOG.info("Address list:%s, %s" % (self.address_list, list_name))
-                cookies = self.address_list[list_name]['cookie']
-                in_cookie = msg.cookie
-                is_src = in_cookie & MANGLE_SD_COOKIE_MASK
-                if is_src:
-                    address = header_list[IPV4].src
-                else:
-                    address = header_list[IPV4].dst
-               
-                in_chain = in_cookie & MANGLE_CHAIN_COOKIE_MASK 
-                for cookie in cookies:
-                    chain = cookie & MANGLE_CHAIN_COOKIE_MASK
-                    if in_chain != chain:
-                        self._update_list(list_name, chain, cookie,
-                            address)
-        
+           
     def packet_in_handler(self, ev):
         msg = ev.msg
         datapath = msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         in_port = msg.match['in_port']
-        cookie = msg.cookie
-        all_cookie = self._get_all_cookies()
-        if cookie in all_cookie.keys():
-            self._add_list(msg, all_cookie[cookie])
-
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocols(ethernet.ethernet)[0]
         self.mac_to_port.setdefault(datapath.id, {})
@@ -742,31 +549,11 @@ class _Switch(object):
 
     def chains_to_table_id(self, chain):
         if chain not in self.chains:
-            raise Exception()
+            raise MangleInconsistencyError(msg='Specified chain is\
+                not exist')
         return self.chains[chain]
 
-    def get_cookie_for_list(self, list_name, table_id, is_src):
-        addresslist = self.address_list.get(list_name, {})
-        cookies = addresslist.get('cookie', [])
-        if len(cookies):
-            # All lists are same list value
-            list_value = cookies[0] & MANGLE_ADDRESS_LIST_COOKIE_MASK
-            list_value = list_value >> MANGLE_ADDRESS_LIST_SHIFT
-        else:
-            self.address_list[list_name]['cookie'] = [] 
-            self.current_list_value = self.current_list_value + 1
-            list_value = self.current_list_value
-            
-        cookie_value = is_src | \
-            (table_id << MANGLE_CHAIN_LIST_SHIFT) | \
-            (list_value << MANGLE_ADDRESS_LIST_SHIFT)
-        if cookie_value not in cookies:
-            cookies.append(cookie_value)
-        self.address_list[list_name]['cookie'] = cookies
-        return cookie_value
-
     def mark_packet(self, mark):
-        LOG.info("mark:%s", mark)
         dscp = self.dscp_mark_mapping.get(mark, self.current_dscp)
         if mark not in self.dscp_mark_mapping:
             self.dscp_mark_mapping[mark] = dscp
@@ -775,12 +562,14 @@ class _Switch(object):
 
     def get_dscp_value(self, mark):
         if mark not in self.dscp_mark_mapping:
-            raise Exception()
+            raise MangleInconsistencyError(msg='Specified mark is\
+                not exist')
         return self.dscp_mark_mapping[mark]
 
     def get_queue_id(self, queue_name):
         if queue_name not in self.queues:
-            raise Exception()
+            raise MangleInconsistencyError(msg='Specified queue is\
+                not exist')
         queue_ids = self.queues[queue_name].values()
         return queue_ids[0]
 
@@ -871,8 +660,7 @@ class _QueueTreeOFConfig(object):
         """"""
         result, msg = self._validation()
         if not result:
-            #TODO: 
-            raise Exception()
+            raise MangleCommandError(msg=msg)
         self.name = name 
         self.min_rate = min_rate
         self.max_rate = max_rate
@@ -900,10 +688,29 @@ class _QueueTreeOFConfig(object):
                 queue_id_map[queue_resource_id] = str(queue.id)
         if len(set(queue_id_map.values())) > 1:
             # Incorrect queue sequence.
-            raise Exception()
+            raise MangleInconsistencyError(msg='Invalid queues')
         return queue_id_map
 
-    def edit_config(self, resources):
+    def edit_config(self, switch):
+        resources = []
+        if self.name in switch.queues.keys():
+            resources = switch.queues[self.name].keys()
+        elif len(switch.queues.values()):
+            for queues in self.queue_ids.values():
+                filled_res = reduce(lambda ql, qr: ql + qr,
+                                       switch.queues.values())
+                f_queue = list(set(queues) - set(filled_res))
+                if len(f_queue):
+                    resources.append(f_queue[0])
+        else:
+            for queues in self.queue_ids.values():
+                if len(queues):
+                    resources.append(queues[0])
+        if not len(resources):
+            raise MangleInconsistencyError(msg='Resources in capable \
+                switch is not have queue resources.')
+        queue_id_mapping = self.get_queue_mapping(resources)
+        switch.queues[self.name] = queue_id_mapping
         capable_switch_id = self.capable_switch.id
         for queue in resources:
             try:
@@ -920,12 +727,12 @@ class _QueueTreeOFConfig(object):
                     )
                 )
             except TypeError:
-                print "argument error"
+                raise MangleCommandError(msg='argument error')
                 return
             try:
                 self.peer.edit_config(OF_CONFIG_TARGET, capable_switch)
             except Exception, e:
-               print e
+               raise MangleCommandError(msg=e)
 
 class _OFCtl(object):
 

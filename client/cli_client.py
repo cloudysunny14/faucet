@@ -66,7 +66,7 @@ class MangleTerm(cmd.Cmd):
         print resp 
 
     def do_queue(self, s):
-        term = QueueTerm()
+        term = QueueTerm(self._switch_id, self.api_client)
         term.prompt = self.prompt[:-2]+':queue> '
         term.cmdloop()
 
@@ -75,11 +75,19 @@ class MangleTerm(cmd.Cmd):
 
 
 class QueueTerm(cmd.Cmd):
-    def __init__(self):
+    def __init__(self, switch_id, api_client):
         cmd.Cmd.__init__(self)
+        self._switch_id = switch_id
+        self.api_client = api_client
 
     def emptyline(self):
         None
+
+    @command()
+    def do_add(self, add_queue):
+        resp = self.api_client.add_queue(add_queue,
+            self._switch_id)
+        print resp
 
     def do_exit(self, s):
         return True
@@ -94,6 +102,7 @@ class IpTerm(cmd.Cmd):
     def emptyline(self):
         None
 
+    @command()
     def do_route(self, route):
         resp = self._api_client.set_route(route,
             self._switch_id)
@@ -108,7 +117,7 @@ class FaucetTerm(cmd.Cmd):
     def __init__(self, host):
         cmd.Cmd.__init__(self)
         self.intro = BANNER 
-        self.prompt = '(%s)faucet> ' % (host)
+        self.prompt = '[%s]> ' % (host)
         self.api_client = None
         try:
             self.api_client = rest_client.FaucetClient(host)

@@ -33,12 +33,13 @@ from ryu.lib import dpid as dpid_lib
 from ryu.lib import ofctl_v1_0
 from ryu.lib import ofctl_v1_2
 from ryu.lib import ofctl_v1_3
+from ryu.lib.ovs import bridge
 from ryu.ofproto import ofproto_v1_0
 from ryu.ofproto import ofproto_v1_2
 from ryu.ofproto import ofproto_v1_3
 from ryu.ofproto import ofproto_v1_3_parser
 
-from lib import qoslib 
+from oflib import qoslib 
 
 SWITCHID_PATTERN = dpid_lib.DPID_PATTERN + r'|all'
 VLANID_PATTERN = r'[0-9]{1,4}|all'
@@ -69,6 +70,7 @@ class Rest(app_manager.RyuApp):
         self.dpset = kwargs['dpset']
         wsgi = kwargs['wsgi']
         self.qoslib = kwargs['qoslib']
+        self.qoslib.use_switch_flow = False
         self.waiters = {}
         self.data = {}
         self.data['dpset'] = self.dpset
@@ -100,6 +102,12 @@ class Rest(app_manager.RyuApp):
                        controller=RestController, action='queue_status',
                        conditions=dict(method=['GET']))
 
+        uri = path + '/queue/{switch_id}'
+        mapper.connect('queue', uri,
+                       controller=RestController, action='add_queue',
+                       conditions=dict(method=['POST']))
+
+
     def stats_reply_handler(self, ev):
         msg = ev.msg
         dp = msg.datapath
@@ -126,7 +134,7 @@ class Rest(app_manager.RyuApp):
     @set_ev_cls(dpset.EventDP, dpset.DPSET_EV_DISPATCHER)
     def handler_datapath(self, ev):
         if ev.enter:
-            RestController.regist_ofs(ev.dp, self.qoslib)
+            RestController.regist_ofs(ev.dp, self.qoslib, self.CONF)
         else:
             RestController.unregist_ofs(ev.dp)
 
@@ -175,6 +183,7 @@ class RestController(ControllerBase):
         super(RestController, self).__init__(req, link, data, **config)
         self.dpset = data['dpset']
         self.waiters = data['waiters']
+        self.conf = config
 
     @classmethod
     def set_logger(cls, logger):
@@ -186,10 +195,10 @@ class RestController(ControllerBase):
         cls._LOGGER.addHandler(hdlr)
 
     @staticmethod
-    def regist_ofs(dp, qoslib):
+    def regist_ofs(dp, qoslib, conf):
         dpid_str = dpid_lib.dpid_to_str(dp.id)
         try:
-            f_ofs = Faucet(dp, qoslib)
+            f_ofs = Faucet(dp, qoslib, conf)
         except OFPUnknownVersion, message:
             RestController._LOGGER.info('dpid=%s: %s',
                                          dpid_str, message)
@@ -222,6 +231,9 @@ class RestController(ControllerBase):
     def set_action(self, req, switch_id, **_kwargs):
         return self._set_action(req, switch_id)
 
+    # POST /faucet/mangle/queue/{switch_id}
+    def add_queue(self, req, switch_id, **_kwargs):
+        return self._add_queue(req, switch_id)
 
     def _access_module(self, switchid, func, waiters=None):
         try:
@@ -258,18 +270,39 @@ class RestController(ControllerBase):
         body = json.dumps(msgs)
         return Response(content_type='application/json', body=body)
 
+    def _add_queue(self, req, switchid):
+        queue_config = req.body
+        try:
+            dps = self._OFS_LIST.get_ofs(switchid)
+        except ValueError, message:
+            return Response(status=400, body=str(message))
+
+        msgs = []
+        for f_ofs in dps.values():
+            try:
+                msg = f_ofs.set_queue(queue_config, self.waiters)
+                msgs.append(msg)
+            except ValueError, message:
+                RestController._LOGGER.debug('rest failetd')
+                return Response(status=400, body=str(message))
+
+        body = json.dumps(msgs)
+        return Response(content_type='application/json', body=body)
+
+
 
 class Faucet(object):
     _OFCTL = {ofproto_v1_0.OFP_VERSION: ofctl_v1_0,
               ofproto_v1_2.OFP_VERSION: ofctl_v1_2,
               ofproto_v1_3.OFP_VERSION: ofctl_v1_3}
 
-    def __init__(self, dp, qoslib):
+    def __init__(self, dp, qoslib, conf):
         super(Faucet, self).__init__()
         self.dp = dp
         self.qoslib = qoslib
-        version = dp.ofproto.OFP_VERSION
+        self.conf = conf
 
+        version = dp.ofproto.OFP_VERSION
         if version not in self._OFCTL:
             raise OFPUnknownVersion(version=version)
 
@@ -318,14 +351,19 @@ class Faucet(object):
                 'details': 'failed added mangle. : %s' % properties}
         
         return REST_COMMAND_RESULT, msg
-   
 
-    @rest_command
-    def set_action(self, rest, waiters, vlan_id):
-        msg = []
-        RestController._LOGGER.debug('rest %s', rest)
-        return msg
-
+    def set_queue(self, queue_qry, waiters):
+        queue_config = parse_qs(queue_qry)
+        ovsctl = bridge.OVSBridge(self.conf, self.dp.id, 'tcp:127.0.0.1:6632')
+        queue = qoslib.QoSLib.queue_tree(ovsctl, self.dp)
+        RestController._LOGGER.info('rest %s', queue_config)
+        name = queue_config['name'][0]
+        max_rate = queue_config['max_rate'][0]
+        min_rate = queue_config['min_rate'][0]
+        queue.queue(name, max_rate, min_rate)
+        self.qoslib.register_queue(queue)
+        msg = {'result': 'success'}
+        return REST_COMMAND_RESULT, msg
 
     def _to_of_flow(self, cookie, priority, match, actions):
         flow = {'cookie': cookie,

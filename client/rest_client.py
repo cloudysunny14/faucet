@@ -55,7 +55,7 @@ def build_url(host, target, params=None):
     return "http://%s%s" % (host, build_path(target, params))
 
 
-class FailedParseActionException(Exception):
+class FailedParseException(Exception):
     message = '%(msg)s'
 
 
@@ -72,6 +72,8 @@ class FaucetClient(object):
         'queue', 'packet-mark', 'chain']
 
     SUPPORTED_ROUTE_ENTRY = ['address', 'destination', 'gateway']
+
+    SUPPORTED_QUEUE_ENTRY = ['name', 'max_rate', 'min_rate']
 
     def __init__(self, host, rest_client=RESTClient):
         self.rest_client = rest_client
@@ -96,7 +98,7 @@ class FaucetClient(object):
     def _action_parse(self, action):
         operations = action.split(' ')
         if not len(operations):
-            raise FailedParseActionException(msg='Can not \
+            raise FailedParseException(msg='Can not \
                 parse actions:%s' % action)
 
         inst = operations[0]
@@ -117,7 +119,7 @@ class FaucetClient(object):
         for query in query_list:
             param = query.split('=')
             if len(param) != 2:
-                raise FailedParseActionException(msg='Can \
+                raise FailedParseException(msg='Can \
                     not parse actions:%s' % query)
             key = param[0]
             value = param[1]
@@ -127,6 +129,22 @@ class FaucetClient(object):
             p_dict[key] = value
         print p_dict
         return p_dict
+
+    def add_queue(self, queue, switch=None):
+        path = 'faucet/queue'
+        if len(switch):
+            path += '/%s' % (switch)
+        params = self._queue_parse(queue) 
+        url, params = self.request(path, params, method='POST')
+        return self.rest_client.POST(url, params)
+
+    def _queue_parse(self, query):
+        query_list = query.split(',')
+        property_dict = self._get_property_dict(query_list,
+            FaucetClient.SUPPORTED_QUEUE_ENTRY, {})
+
+        return property_dict
+
 
     def set_route(self, route, switch=None):
         path = 'router/%s' % (switch)
